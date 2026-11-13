@@ -310,6 +310,9 @@
 &wifi {
 	status = "okay";
 
+	#address-cells = <1>;
+	#size-cells = <0>;
+
 	nvmem-cells = <&eeprom_factory_0>;
 	nvmem-cell-names = "eeprom";
 

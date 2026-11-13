@@ -66,9 +66,11 @@ assert "workflow_dispatch" in data["on"], "workflow must be manually dispatchabl
 env = data.get("env") or {}
 assert env.get("WRT_REPO") == "https://github.com/chasey-dev/immortalwrt-mt798x-rebase"
 assert str(env.get("WRT_BRANCH")) == "25.12"
-assert env.get("WRT_REF") == "${{ inputs.wrt_ref || '2d0e93b1253660ae15d195786cd7fa913d70d42a' }}"
+assert env.get("WRT_REF") == "${{ inputs.wrt_ref || 'daa7695e855d98abbd1b2df42b1dc03812b267b3' }}"
 jobs = data.get("jobs") or {}
-assert list(jobs) == ["build"], "closed workflow must expose exactly one build job"
+assert set(jobs) == {"build", "cache-rollover"}, "closed workflow must have one build and one cache cleanup job"
+assert 'inputs.enable_cache' in jobs['cache-rollover']['if']
+assert jobs["cache-rollover"].get("needs") == "build", "cache cleanup must follow the build"
 PY
 		then
 			pass 'closed workflow parses with the pinned 25.12 source contract'
@@ -406,7 +408,8 @@ path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
 data = yaml.load(text, Loader=WorkflowLoader)
 assert isinstance(data, dict), "workflow root must be a mapping"
-assert set((data.get("jobs") or {}).keys()) == {"build"}, "expected exactly one build job"
+jobs = data.get("jobs") or {}
+assert set(jobs) == {"build", "cache-rollover"} and jobs["cache-rollover"].get("needs") == "build"
 dispatch = (data.get("on") or {}).get("workflow_dispatch")
 assert isinstance(dispatch, dict), "workflow_dispatch must define inputs"
 inputs = dispatch.get("inputs") or {}
@@ -418,11 +421,12 @@ expected_env = {
     "WRT_CONFIG": "NRADIO-C8-660-CLOSED",
     "WRT_REPO": "https://github.com/chasey-dev/immortalwrt-mt798x-rebase",
     "WRT_BRANCH": "25.12",
-    "WRT_REF": "${{ inputs.wrt_ref || '2d0e93b1253660ae15d195786cd7fa913d70d42a' }}",
+    "WRT_REF": "${{ inputs.wrt_ref || 'daa7695e855d98abbd1b2df42b1dc03812b267b3' }}",
     "WRT_WIFI": "mt_wifi-7.6.7.3-hnat-wed",
 }
 for key, value in expected_env.items():
     assert str(env.get(key)) == value, f"unexpected {key}: {env.get(key)!r}"
+assert re.fullmatch(r"[0-9a-f]{40}", str(env.get("WRT_MTK_APPS_REF"))), "MTK plugin source must be pinned"
 
 steps = data["jobs"]["build"].get("steps") or []
 checkout = next((step for step in steps if str(step.get("uses", "")).startswith("actions/checkout@")), None)
@@ -430,6 +434,7 @@ assert checkout is not None, "missing actions/checkout"
 assert checkout.get("with", {}).get("persist-credentials") in (False, "false"), "checkout credentials must be disabled"
 
 step_names = [step.get("name") for step in steps]
+assert step_names.index("Refresh MTK LuCI packages") < step_names.index("Preflight Closed Firmware")
 assert "Preflight Closed Firmware" in step_names, "missing closed firmware preflight step"
 assert step_names.index("Preflight Closed Firmware") < step_names.index("Configure Closed Firmware"), (
     "closed firmware preflight must run before configuration"
@@ -496,6 +501,7 @@ package_run = str(package_step.get("run", ""))
 for artifact in ("factory", "sysupgrade", "initramfs", "bl2"):
     assert f"select_one {artifact}" in package_run, f"missing unique {artifact} selection"
 assert "SOURCE_COMMIT=$WRT_HASH_FULL" in package_run, "artifact metadata lacks full source commit"
+assert "MTK_APPS_COMMIT=$WRT_MTK_APPS_REF" in package_run, "artifact metadata lacks MTK plugin source commit"
 assert "sha256sum ./*" not in package_run, "checksum generation must not include sha256sums itself"
 for artifact_name in (
     "immortalwrt-c8-660-closed-factory.bin",

@@ -22,19 +22,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Projects
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Refresh pinned SHA256
         run: |
           set -euo pipefail
 
+          REF_FILE=".github/init_build_environment.ref"
           PIN_FILE=".github/init_build_environment.sha256"
-          URL="https://build-scripts.immortalwrt.org/init_build_environment.sh"
+          REF="$(git ls-remote https://github.com/immortalwrt/build-scripts.git refs/heads/master | cut -f1)"
+          [[ "$REF" =~ ^[0-9a-f]{40}$ ]]
+          URL="https://raw.githubusercontent.com/immortalwrt/build-scripts/$REF/init_build_environment.sh"
 
           curl -fsSL --retry 3 "$URL" -o /tmp/init_build_env.sh
+          bash -n /tmp/init_build_env.sh
+          printf '%s\n' "$REF" > "$REF_FILE"
           sha256sum /tmp/init_build_env.sh | cut -d' ' -f1 > "$PIN_FILE"
-
-          echo "Pinned SHA256: $(cat "$PIN_FILE")"
 
       - name: Commit changes
         env:
@@ -42,7 +45,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if git diff --quiet -- .github/init_build_environment.sha256; then
+          if git diff --quiet -- .github/init_build_environment.ref .github/init_build_environment.sha256; then
             echo "No init_build_environment.sh SHA256 change"
             exit 0
           fi
@@ -51,7 +54,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$BRANCH"
-          git add .github/init_build_environment.sha256
+          git add .github/init_build_environment.ref .github/init_build_environment.sha256
           git commit -m "ci: update init build environment sha"
           REMOTE_REF="refs/heads/$BRANCH"
           EXPECTED="$(git ls-remote origin "$REMOTE_REF" | awk '{print $1}')"

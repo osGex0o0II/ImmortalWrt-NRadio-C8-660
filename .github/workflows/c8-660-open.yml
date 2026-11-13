@@ -22,6 +22,11 @@ on:
         required: true
         default: true
         type: boolean
+      enable_cache:
+        description: "Reuse the upstream build cache"
+        required: true
+        default: true
+        type: boolean
       debug_dump:
         description: "Print target DUMP diagnostics"
         required: true
@@ -61,13 +66,13 @@ env:
 jobs:
   build:
     name: immortalwrt-c8-660
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       actions: write
     steps:
       - name: Checkout Projects
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -77,7 +82,9 @@ jobs:
         run: |
           sudo -E apt -yqq purge firefox 2>/dev/null || true
           sudo -E apt -yqq update && sudo -E apt -yqq full-upgrade && sudo -E apt -yqq install -y dos2unix libfuse-dev git curl wget file jq unzip && sudo -E apt -yqq autoremove --purge && sudo -E apt -yqq autoclean
-          curl -fsSL --retry 3 "https://build-scripts.immortalwrt.org/init_build_environment.sh" -o /tmp/init_build_env.sh
+          init_ref="$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/.github/init_build_environment.ref")"
+          [[ "$init_ref" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Invalid build initializer commit"; exit 1; }
+          curl -fsSL --retry 3 "https://raw.githubusercontent.com/immortalwrt/build-scripts/$init_ref/init_build_environment.sh" -o /tmp/init_build_env.sh
           INIT_BUILD_ACTUAL_SHA256="$(sha256sum /tmp/init_build_env.sh | cut -d' ' -f1)"
           INIT_BUILD_PIN_FILE="$GITHUB_WORKSPACE/.github/init_build_environment.sha256"
           INIT_BUILD_EXPECTED_SHA256="${INIT_BUILD_EXPECTED_SHA256:-${{ secrets.INIT_BUILD_EXPECTED_SHA256 || '' }}}"
@@ -218,8 +225,9 @@ jobs:
           node --check "$GITHUB_WORKSPACE/patches/files/www/luci-static/resources/view/c8modem/sms-forward.js"
 
       - name: Restore Build Cache
+        if: ${{ inputs.enable_cache }}
         id: check-cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           key: wrt-${{env.WRT_CONFIG}}-${{env.WRT_INFO}}-${{env.WRT_BRANCH}}-${{env.WRT_TARGET}}-${{env.WRT_HASH}}
           restore-keys: |
@@ -232,6 +240,7 @@ jobs:
             ./wrt/staging_dir/tool*
 
       - name: Prepare Toolchain Cache
+        if: ${{ inputs.enable_cache }}
         run: |
           export CCACHE_DIR="${{ env.CCACHE_DIR }}"
           if [ -d "./wrt/staging_dir" ]; then
@@ -315,14 +324,6 @@ jobs:
             fi
             printf '%s=%s\n' "$KEY" "$VALUE" >> "$GITHUB_ENV"
           done < "$LOCK_FILE"
-
-      - name: Apply sing-box lock
-        run: |
-          if [ "${PROXY_LOCKS_ENABLED:-false}" = "true" ]; then
-            bash "$GITHUB_WORKSPACE/Scripts/ApplyProxyLocks.sh" ./wrt/
-          else
-            echo "HomeProxy/sing-box not enabled; skipping sing-box lock"
-          fi
 
       - name: Patch LuCI JS (fix formatStats crash)
         run: |
@@ -464,7 +465,7 @@ jobs:
 
       - name: Upload Build Log
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: build-log-${{env.WRT_CONFIG}}
           path: ./wrt/build.log
@@ -473,7 +474,7 @@ jobs:
 
       - name: Upload Packages Debug
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: packages-debug-${{env.WRT_CONFIG}}
           path: /tmp/packages.log
@@ -482,7 +483,7 @@ jobs:
 
       - name: Upload Config Snapshot
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: config-snapshot-${{env.WRT_CONFIG}}
           path: |
@@ -504,6 +505,15 @@ jobs:
           echo "======================="
           du -h --max-depth=1
           echo "======================="
+
+      - name: Validate C8 device tree address cells
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dtc=(./wrt/build_dir/target-*/linux-mediatek_filogic/linux-*/scripts/dtc/dtc)
+          dtb=(./wrt/build_dir/target-*/linux-mediatek_filogic/image-mt7981b-nradio-c8-660.dtb)
+          [[ ${#dtc[@]} -eq 1 && ${#dtb[@]} -eq 1 ]]
+          "${dtc[0]}" -q -Ereg_format -Eavoid_default_addr_size -I dtb -O dtb -o /dev/null "${dtb[0]}"
 
       - name: Package Firmware
         run: |
@@ -893,8 +903,7 @@ jobs:
                   ;;
               esac
             fi
-            DETECTED_SING_BOX_VERSION="${SING_BOX_MANIFEST_VERSION%%-*}"
-            echo "OK: sing-box manifest version ${SING_BOX_MANIFEST_VERSION}"
+              echo "OK: sing-box manifest version ${SING_BOX_MANIFEST_VERSION}"
           else
             reject_rootfs 'usr/bin/sing-box' 'sing-box proxy core'
           fi
@@ -911,6 +920,7 @@ jobs:
             require_rootfs 'etc/homeproxy/scripts/generate_client\.uc' 'HomeProxy client config generator'
             require_rootfs 'etc/homeproxy/scripts/update_subscriptions\.uc' 'HomeProxy subscription updater'
             require_rootfs 'etc/uci-defaults/99-homeproxy-modern-defaults' 'HomeProxy modern subscription defaults'
+            require_rootfs 'usr/libexec/homeproxy-c8-check-legacy' 'HomeProxy retained-config compatibility guard'
             require_rootfs 'usr/lib/ucode/digest\.so' 'ucode digest module for HomeProxy'
             HOMEPROXY_NODE_JS="$("$UNSQUASHFS" -cat "$ROOTFS" www/luci-static/resources/view/homeproxy/node.js)"
             HOMEPROXY_SHARED_JS="$("$UNSQUASHFS" -cat "$ROOTFS" www/luci-static/resources/homeproxy.js)"
@@ -943,118 +953,34 @@ jobs:
             exit 1
           fi
             HOMEPROXY_GENERATOR="$("$UNSQUASHFS" -cat "$ROOTFS" etc/homeproxy/scripts/generate_client.uc)"
-            if ! printf '%s' "$HOMEPROXY_GENERATOR" | grep -q 'modern_node_types'; then
-              echo "::error::HomeProxy generator is missing modern-node guard"
+            for fragment in \
+              "if (!is_modern_node(node))" \
+              "urltest_nodes = filter_modern_nodes(" \
+              "filter_modern_nodes(cfg.urltest_nodes)" \
+              "action: 'sniff'" \
+              "config.route.default_http_client = 'direct-http';" \
+              "tag: 'direct-http'"
+            do
+              if ! grep -Fq -- "$fragment" <<< "$HOMEPROXY_GENERATOR"; then
+                echo "::error::HomeProxy generator missing: $fragment"
+                exit 1
+              fi
+            done
+            if grep -Eq "sniff_override_destination:|sniff: true|download_detour:" <<< "$HOMEPROXY_GENERATOR"; then
+              echo "::error::HomeProxy generator uses deprecated sing-box fields"
               exit 1
-            fi
-            if ! printf '%s' "$HOMEPROXY_GENERATOR" | grep -Fq "inbound: ['mixed-in', 'redirect-in', 'tproxy-in', 'tun-in']"; then
-              echo "::error::HomeProxy generator is missing sing-box route sniff action"
-              exit 1
-            fi
-            if printf '%s' "$HOMEPROXY_GENERATOR" | grep -Fq "sniff_override_destination: strToBool(sniff_override)" || printf '%s' "$HOMEPROXY_GENERATOR" | grep -Fq "sniff: true"; then
-              echo "::error::HomeProxy generator still contains legacy sing-box inbound sniff fields"
-              exit 1
-            fi
-            if ! printf '%s' "$HOMEPROXY_GENERATOR" | grep -Fq "const main_urltest_nodes = filter(uci.get(uciconfig, ucimain, 'main_urltest_nodes')" &&
-               ! printf '%s' "$HOMEPROXY_GENERATOR" | grep -Fq "const main_urltest_nodes = filterExistingNodes("; then
-              echo "::error::HomeProxy generator does not filter stale main urltest nodes"
-              exit 1
-            fi
-            if printf '%s' "$HOMEPROXY_GENERATOR" | grep -Fq "main_udp_urltest_nodes" &&
-               ! printf '%s' "$HOMEPROXY_GENERATOR" | grep -Fq "const main_udp_urltest_nodes = filter(uci.get(uciconfig, ucimain, 'main_udp_urltest_nodes')"; then
-              echo "::error::HomeProxy generator does not filter stale UDP urltest nodes"
-              exit 1
-            fi
-            if ! printf '%s' "$HOMEPROXY_GENERATOR" | grep -Fq "const cfg_urltest_nodes = filter(cfg.urltest_nodes || []"; then
-              echo "::error::HomeProxy generator does not filter stale custom urltest nodes"
-              exit 1
-            fi
-            if ! printf '%s' "$HOMEPROXY_GENERATOR" | grep -Fq "!is_modern_node(urltest_node)"; then
-              echo "::error::HomeProxy generator does not filter standalone stale/legacy urltest outbound nodes"
-              exit 1
-            fi
-            DETECTED_SING_BOX_VERSION="${DETECTED_SING_BOX_VERSION:-0.0.0}"
-            version_ge() {
-              awk -v have="$1" -v need="$2" '
-                function splitver(v, a) { split(v, a, /[.+_-]/) }
-                BEGIN {
-                  splitver(have, h); splitver(need, n)
-                  for (i = 1; i <= 4; i++) {
-                    hv = (h[i] == "" ? 0 : h[i] + 0)
-                    nv = (n[i] == "" ? 0 : n[i] + 0)
-                    if (hv > nv) exit 0
-                    if (hv < nv) exit 1
-                  }
-                  exit 0
-                }'
-            }
-            if version_ge "$DETECTED_SING_BOX_VERSION" "1.14.0"; then
-              if ! printf '%s' "$HOMEPROXY_GENERATOR" | grep -Fq "default_http_client: 'direct-http'"; then
-                echo "::error::HomeProxy generator is missing sing-box 1.14 direct HTTP client default"
-                exit 1
-              fi
-              if ! printf '%s' "$HOMEPROXY_GENERATOR" | grep -Fq "tag: 'direct-http'"; then
-                echo "::error::HomeProxy generator is missing sing-box 1.14 direct HTTP client definition"
-                exit 1
-              fi
-              HTTP_CLIENT_DEFS="$(printf '%s' "$HOMEPROXY_GENERATOR" | awk 'index($0, "config.http_clients = [") || index($0, "http_clients: [") { count++ } END { print count + 0 }')"
-              if [ "$HTTP_CLIENT_DEFS" -ne 1 ]; then
-                echo "::error::Unexpected HomeProxy HTTP client definition count for sing-box ${DETECTED_SING_BOX_VERSION}: ${HTTP_CLIENT_DEFS}"
-                exit 1
-              fi
-              HTTP_CLIENT_USES="$(printf '%s' "$HOMEPROXY_GENERATOR" | awk 'index($0, "http_client: '\''direct-http'\''") { count++ } END { print count + 0 }')"
-              if [ "$HTTP_CLIENT_USES" -lt 1 ]; then
-                echo "::error::HomeProxy generator does not use direct HTTP client for remote rule-set bootstrap"
-                exit 1
-              fi
-              if printf '%s' "$HOMEPROXY_GENERATOR" | grep -Fq "download_detour:"; then
-                echo "::error::HomeProxy generator still uses deprecated download_detour for sing-box ${DETECTED_SING_BOX_VERSION}"
-                exit 1
-              fi
-            else
-              if ! printf '%s' "$HOMEPROXY_GENERATOR" | grep -Fq "download_detour: 'direct-out'"; then
-                echo "::error::HomeProxy generator does not force rule-set bootstrap downloads to direct-out"
-                exit 1
-              fi
-              DIRECT_DETOURS="$(printf '%s' "$HOMEPROXY_GENERATOR" | awk 'index($0, "download_detour: '\''direct-out'\''") { count++ } END { print count + 0 }')"
-              if [ "$DIRECT_DETOURS" -lt 3 ]; then
-                echo "::error::HomeProxy generator does not consistently force rule-set bootstrap downloads to direct-out"
-                exit 1
-              fi
-              if printf '%s' "$HOMEPROXY_GENERATOR" | grep -Fq "download_detour: 'main-out'"; then
-                echo "::error::HomeProxy generator still bootstraps rule-set downloads through main-out"
-                exit 1
-              fi
             fi
             HOMEPROXY_UPDATER="$("$UNSQUASHFS" -cat "$ROOTFS" etc/homeproxy/scripts/update_subscriptions.uc)"
-            if ! printf '%s' "$HOMEPROXY_UPDATER" | grep -Fq "function modern_check"; then
-              echo "::error::HomeProxy updater is missing modern subscription node filter"
-              exit 1
-            fi
-            if ! printf '%s' "$HOMEPROXY_UPDATER" | grep -Fq "config = modern_check(config);"; then
-              echo "::error::HomeProxy updater does not apply modern subscription node filter"
-              exit 1
-            fi
-            if ! printf '%s' "$HOMEPROXY_UPDATER" | grep -Fq "case 'vmess':"; then
-              echo "::error::HomeProxy updater is missing VMess rejection path"
-              exit 1
-            fi
-            if printf '%s' "$HOMEPROXY_UPDATER" | grep -Eq "aes-128-ctr|aes-192-ctr|aes-256-ctr|aes-128-cfb|aes-192-cfb|aes-256-cfb|chacha20'|chacha20-ietf'|rc4-md5"; then
-              echo "::error::HomeProxy updater still allows legacy Shadowsocks methods"
-              exit 1
-            fi
-            if ! printf '%s' "$HOMEPROXY_UPDATER" | grep -Fq "function is_placeholder_subscription_node"; then
-              echo "::error::HomeProxy updater is missing placeholder subscription node filter"
-              exit 1
-            fi
-            if ! printf '%s' "$HOMEPROXY_UPDATER" | grep -Fq "Skipping placeholder subscription node"; then
-              echo "::error::HomeProxy updater does not log skipped placeholder subscription nodes"
-              exit 1
-            fi
-            if ! printf '%s' "$HOMEPROXY_UPDATER" | grep -Fq "No main node is selected, switching to the first node"; then
-              echo "::error::HomeProxy updater is missing first subscription node fallback"
-              exit 1
-            fi
+            for fragment in \
+              "modern_check(parse_uri(node))" \
+              "Skipping placeholder subscription node" \
+              "No main node is selected, switching to the first node"
+            do
+              if ! grep -Fq -- "$fragment" <<< "$HOMEPROXY_UPDATER"; then
+                echo "::error::HomeProxy updater missing: $fragment"
+                exit 1
+              fi
+            done
             HOMEPROXY_DEFAULTS="$("$UNSQUASHFS" -cat "$ROOTFS" etc/uci-defaults/99-homeproxy-modern-defaults)"
             if ! printf '%s' "$HOMEPROXY_DEFAULTS" | grep -Fq "homeproxy.subscription.user_agent='v2ray'" || ! printf '%s' "$HOMEPROXY_DEFAULTS" | grep -Fq "homeproxy.subscription.allow_insecure='0'"; then
               echo "::error::HomeProxy subscription defaults are missing v2ray user-agent or allow_insecure=0"
@@ -1067,6 +993,7 @@ jobs:
             reject_rootfs 'usr/share/rpcd/acl\.d/luci-app-homeproxy\.json' 'LuCI HomeProxy ACL'
             reject_rootfs 'www/luci-static/resources/view/homeproxy/' 'LuCI HomeProxy views'
             reject_rootfs 'etc/uci-defaults/99-homeproxy-modern-defaults' 'HomeProxy modern subscription defaults'
+            reject_rootfs 'usr/libexec/homeproxy-c8-check-legacy' 'HomeProxy retained-config compatibility guard'
           fi
           if config_enabled 'kmod-nft-tproxy'; then
             require_rootfs 'lib/modules/.*/nft_tproxy\.ko' 'NFT tproxy kernel module'
@@ -1236,13 +1163,16 @@ jobs:
           fi
 
           C8_DEFAULTS="$("$UNSQUASHFS" -cat "$ROOTFS" etc/uci-defaults/99-v12-defaults.sh)"
+          offload=0
+          if [ "$ENABLE_FLOW_OFFLOADING" = true ]; then offload=1; fi
           for REQUIRED_DEFAULT in \
             "network.wan.device='eth1'" \
             "network.wan.proto='dhcp'" \
             "network.wan6.proto='dhcpv6'" \
             "dhcp.lan.dhcpv6='relay'" \
             "network.globals.packet_steering='1'" \
-            "firewall.@defaults[0].flow_offloading_hw='1'"
+            "firewall.@defaults[0].flow_offloading='$offload'" \
+            "firewall.@defaults[0].flow_offloading_hw='$offload'"
           do
             if ! printf '%s' "$C8_DEFAULTS" | grep -Fq "$REQUIRED_DEFAULT"; then
               echo "::error::C8 default network setting missing: $REQUIRED_DEFAULT"
@@ -1254,9 +1184,10 @@ jobs:
       - name: Cleanup Old Releases
         if: ${{ inputs.publish_release }}
         env:
+          KEEP_RELEASES: ${{ inputs.keep_releases }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          KEEP="${{ inputs.keep_releases }}"
+          KEEP="$KEEP_RELEASES"
           case "$KEEP" in
             ''|*[!0-9]*) KEEP=3 ;;
           esac
@@ -1279,7 +1210,7 @@ jobs:
 
       - name: Release Firmware
         if: ${{ inputs.publish_release }}
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3.0.0
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3  # v3.0.4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -1315,7 +1246,7 @@ jobs:
 
       - name: Upload Firmware Artifact
         if: ${{ inputs.publish_release == false }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: firmware-${{env.WRT_CONFIG}}-${{env.WRT_DATE}}
           path: ./wrt/upload/
@@ -1323,7 +1254,7 @@ jobs:
           if-no-files-found: error
 
       - name: Check Source Drift
-        if: ${{ success() && steps.check-cache.outputs.cache-hit != 'true' }}
+        if: ${{ inputs.enable_cache && success() && steps.check-cache.outputs.cache-hit != 'true' }}
         run: |
           set -euo pipefail
           REMOTE_HEAD="$(git ls-remote "$WRT_REPO" "refs/heads/$WRT_BRANCH" 2>/dev/null | head -1 | cut -f1 || true)"
@@ -1339,8 +1270,8 @@ jobs:
           fi
 
       - name: Save Build Cache
-        if: ${{ success() && steps.check-cache.outputs.cache-hit != 'true' && env.WRT_TEST != 'true' && env.SOURCE_DRIFTED != 'true' }}
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        if: ${{ inputs.enable_cache && success() && steps.check-cache.outputs.cache-hit != 'true' && env.WRT_TEST != 'true' && env.SOURCE_DRIFTED != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           key: wrt-${{env.WRT_CONFIG}}-${{env.WRT_INFO}}-${{env.WRT_BRANCH}}-${{env.WRT_TARGET}}-${{env.WRT_HASH}}
           path: |
@@ -1359,8 +1290,8 @@ jobs:
   cache-rollover:
     name: Cache Rollover
     needs: build
-    if: always()
-    runs-on: ubuntu-latest
+    if: ${{ inputs.enable_cache && always() }}
+    runs-on: ubuntu-24.04
     permissions:
       actions: write
       contents: read

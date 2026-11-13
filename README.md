@@ -1,6 +1,6 @@
 # ImmortalWrt-NRadio-C8-660
 
-[![Build](https://github.com/osGex0o0II/ImmortalWrt-C8-660-CI/actions/workflows/c8-660-open.yml/badge.svg)](https://github.com/osGex0o0II/ImmortalWrt-C8-660-CI/actions/workflows/c8-660-open.yml)
+[![Build](https://github.com/osGex0o0II/ImmortalWrt-NRadio-C8-660/actions/workflows/c8-660-open.yml/badge.svg)](https://github.com/osGex0o0II/ImmortalWrt-NRadio-C8-660/actions/workflows/c8-660-open.yml)
 
 NRadio C8-660 (MediaTek MT7981B) 专用 ImmortalWrt 固件编译 CI。
 
@@ -79,7 +79,8 @@ ip-full, lsblk, openssh-keygen, adb（RM520N 原生 IPv6/ADB 状态支持）等
 
 ### 闭源构建特点
 
-- 固定 `chasey-dev/immortalwrt-mt798x-rebase` 的 `25.12` 分支提交 `2d0e93b1253660ae15d195786cd7fa913d70d42a`
+- 固定 `chasey-dev/immortalwrt-mt798x-rebase` 的 `25.12` 分支提交 `daa7695e855d98abbd1b2df42b1dc03812b267b3`
+- MTK Wi-Fi 管理、TurboACC、EQoS 及 Wi-Fi 配套包单独跟进 `25.12` 的插件提交；具体 SHA 记录在 `WRT_MTK_APPS_REF` 和固件发布元数据中
 - Linux 6.12、mt_wifi 7.6.7.3、`kmod-mediatek_hnat`、`kmod-warp` 和 WARP/WED vendor 链
 - WiFi 特性块整体镜像上游 `defconfig/mt7981-ax3000.config`：`MTK_OWE_SUPPORT` 负责提前引入 SAE 类型定义、`MTK_DOT11K_RRM_SUPPORT` 提供 RRM 类型，缺失会导致 mt_wifi 编译期 incomplete-type 错误
 - conninfra 需显式选择 `MTK_CONNINFRA_APSOC=y`（父开关默认关闭会让 defconfig 丢弃 MT7981 子项，modpost 报 `apconninfra_of_ids` 未定义）；校验器在 defconfig 后强制断言上述符号
@@ -185,7 +186,7 @@ cat /sys/kernel/debug/hnat/hnat_entry | grep -c BIND
 | 网络栈调优 | TCP/UDP buffer 扩大 + NAPI 轮询参数优化 | `Scripts/Settings.sh` |
 | C8 短信转发 | 内置多通道推送、主备通道、日志、测试按钮和 `sms_tool` 超时保护 | `patches/files/usr/bin/c8-sms-forward`, `patches/files/www/luci-static/resources/view/c8modem/` |
 | 第三方包锁定 | 通过 `PKG_LOCK_<name>_COMMIT` 环境变量锁定包版本 | `Scripts/Packages.sh` |
-| sing-box 版本锁定 | Open 默认 HomeProxy/sing-box 构建通过 `.github/proxy-locks.env` 回填 `sing-box` release | `.github/workflows/update-proxy-locks.yml`, `Scripts/ApplyProxyLocks.sh` |
+| 代理组件版本锁定 | HomeProxy 与 sing-box 打包规则取自同一个 VIKINGYFY/packages 提交；锁文件校验内核发布标签、APK 版本和源码 SHA-256 | `.github/proxy-locks.env`, `Scripts/ApplyProxyLocks.sh` |
 | SHA256 脚本校验 | `init_build_environment.sh` 使用仓库 pin 文件校验，并由定时工作流跟随上游更新 | `.github/init_build_environment.sha256`, `.github/workflows/update-init-build-sha.yml` |
 | 旧设备兼容 | `SUPPORTED_DEVICES nradio,wt9103` 支持旧 DTS 名称升级 | `patches/filogic-c8-660.mk` |
 | CCache 加速 | 编译缓存自动持久化，增量编译时间 -50% | `.github/workflows` |
@@ -197,12 +198,16 @@ cat /sys/kernel/debug/hnat/hnat_entry | grep -c BIND
 |------|------|------|
 | `PKG_LOCK_aurora_COMMIT` | 锁定 luci-theme-aurora 版本 | `abc123def` |
 | `PKG_LOCK_partexp_COMMIT` | 按需启用 luci-app-partexp 时锁定版本 | `deadbeef` |
-| `PKG_LOCK_homeproxy_COMMIT` | 锁定默认 HomeProxy 版本（可由 `.github/proxy-locks.env` 刷新） | `e8b8ebc...` |
-| `SING_BOX_VERSION` | 默认 sing-box 使用的稳定版版本号 | `1.13.14` |
-| `SING_BOX_HASH` | 默认 sing-box 使用的 tarball SHA256 | `d18294...` |
+| `PKG_LOCK_homeproxy_COMMIT` | HomeProxy 与 sing-box 打包规则的上游提交 | `f28fdc1...` |
+| `SING_BOX_VERSION` | sing-box 的 APK 版本号；允许上游配套的预发布版本 | `1.15.0_alpha13` |
+| `SING_BOX_HASH` | sing-box 源码压缩包 SHA-256 | `29047987...` |
 | `INIT_BUILD_EXPECTED_SHA256` | 可选覆盖仓库 pin 文件，用于临时固定构建环境脚本哈希 | `sha256sum` 输出 |
 | `WRT_WORD` (secret) | WiFi 密码（空=开放） | `MyPassword` |
 | `WRT_PW` (secret) | root 登录密码，必填；为空时 CI 会拒绝构建 | `MyPassword` |
+
+当前代理基线为 HomeProxy `20261111-r1` 与 sing-box `v1.15.0-alpha.13`。HomeProxy 要求 sing-box 至少 `1.15.0-alpha.10`，因此这里选用 1.15 预发布版。定时刷新从同一个上游提交读取两者的打包规则，校验内核源码后提交更新供审核。
+
+保留配置升级时，若旧 HomeProxy 配置使用新版已移除的路由模式或独立 UDP 节点，代理会暂停并保留原配置。请先备份，再手动改成新版支持的策略。
 
 ## 使用流程
 

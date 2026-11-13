@@ -147,9 +147,18 @@ fi
 if grep -qs '^CONFIG_PACKAGE_luci-app-partexp=y$' "${CONFIG_FILES[@]}"; then
 	UPDATE_PACKAGE "luci-app-partexp" "sirpdboy/luci-app-partexp" "main" "" "partexp" "luci-app-partexp" "partexp"
 fi
+INSTALL_HOMEPROXY=false
 if grep -qs '^CONFIG_PACKAGE_luci-app-homeproxy=y$' "${CONFIG_FILES[@]}"; then
-	HOMEPROXY_LOCK="${PKG_LOCK_homeproxy_COMMIT:-}"
-	HOMEPROXY_BRANCH="${PKG_LOCK_homeproxy_BRANCH:-main}"
+	INSTALL_HOMEPROXY=true
+fi
+if [[ "$INSTALL_HOMEPROXY" == true ]] || grep -qs '^CONFIG_PACKAGE_sing-box=y$' "${CONFIG_FILES[@]}"; then
+	PROXY_LOCK_FILE="$GITHUB_WORKSPACE/.github/proxy-locks.env"
+	HOMEPROXY_LOCK="$(sed -n 's/^PKG_LOCK_homeproxy_COMMIT=//p' "$PROXY_LOCK_FILE" | tr -d '\r')"
+	HOMEPROXY_BRANCH="$(sed -n 's/^PKG_LOCK_homeproxy_BRANCH=//p' "$PROXY_LOCK_FILE" | tr -d '\r')"
+	if [[ ! "$HOMEPROXY_LOCK" =~ ^[0-9a-f]{40}$ || ! "$HOMEPROXY_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+		echo "::error::Invalid VIKINGYFY packages lock"
+		exit 1
+	fi
 	echo " "
 	echo "Package: luci-app-homeproxy (repo: VIKINGYFY/packages, branch: $HOMEPROXY_BRANCH)"
 	rm -rf ../feeds/luci/applications/luci-app-homeproxy luci-app-homeproxy vikingyfy-packages-tmp-homeproxy
@@ -166,24 +175,35 @@ if grep -qs '^CONFIG_PACKAGE_luci-app-homeproxy=y$' "${CONFIG_FILES[@]}"; then
 		echo "::error::Failed to clone VIKINGYFY/packages after 3 attempts"
 		exit 1
 	fi
-	if [ -n "$HOMEPROXY_LOCK" ]; then
-		(
-			cd vikingyfy-packages-tmp-homeproxy
-			git fetch --unshallow 2>/dev/null || git fetch --all --tags
-			git checkout "$HOMEPROXY_LOCK"
-		) || {
-			echo "::error::Failed to checkout luci-app-homeproxy commit $HOMEPROXY_LOCK"
-			exit 1
-		}
-	fi
-	if [ ! -f vikingyfy-packages-tmp-homeproxy/luci-app-homeproxy/Makefile ]; then
-		echo "::error::luci-app-homeproxy not found in VIKINGYFY/packages"
+	(
+		cd vikingyfy-packages-tmp-homeproxy
+		if ! git cat-file -e "$HOMEPROXY_LOCK^{commit}" 2>/dev/null; then
+			git fetch --depth=1 origin "$HOMEPROXY_LOCK"
+		fi
+		git checkout --detach "$HOMEPROXY_LOCK"
+	) || {
+		echo "::error::Failed to checkout VIKINGYFY package commit $HOMEPROXY_LOCK"
+		exit 1
+	}
+	if [ ! -f vikingyfy-packages-tmp-homeproxy/sing-box/Makefile ]; then
+		echo "::error::sing-box package recipe not found in VIKINGYFY/packages"
 		exit 1
 	fi
-	mv vikingyfy-packages-tmp-homeproxy/luci-app-homeproxy ./luci-app-homeproxy
+	# Keep the feed checkout intact, but use the paired recipe as the active package.
+	rm -f feeds/packages/sing-box feeds/packages/sing-box-tiny
+	rm -rf ./sing-box
+	mv vikingyfy-packages-tmp-homeproxy/sing-box ./sing-box
+	bash "$GITHUB_WORKSPACE/Scripts/ApplyProxyLocks.sh" ..
+	if [[ "$INSTALL_HOMEPROXY" == true ]]; then
+		if [ ! -f vikingyfy-packages-tmp-homeproxy/luci-app-homeproxy/Makefile ]; then
+			echo "::error::luci-app-homeproxy not found in VIKINGYFY/packages"
+			exit 1
+		fi
+		mv vikingyfy-packages-tmp-homeproxy/luci-app-homeproxy ./luci-app-homeproxy
+		echo "Package ready: luci-app-homeproxy"
+		bash "$GITHUB_WORKSPACE/Scripts/PatchHomeProxyModern.sh" "luci-app-homeproxy"
+	fi
 	rm -rf vikingyfy-packages-tmp-homeproxy
-	echo "Package ready: luci-app-homeproxy"
-	bash "$GITHUB_WORKSPACE/Scripts/PatchHomeProxyModern.sh" "luci-app-homeproxy"
 fi
 
 #引入私有扩展脚本

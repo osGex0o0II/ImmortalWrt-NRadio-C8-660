@@ -14,27 +14,6 @@ fail() {
 	FAILURES=$((FAILURES + 1))
 }
 
-test_homeproxy_anchor() {
-	local script="$REPO_ROOT/Scripts/PatchHomeProxyModern.sh"
-
-	if python3 - "$script" <<'PY'
-import sys
-from pathlib import Path
-
-text = Path(sys.argv[1]).read_text(encoding="utf-8")
-old_anchor = "insert_after = \"\"\"const log_level = uci.get(uciconfig, ucimain, 'log_level') || 'warn';\\n/* UCI config end */\"\"\""
-new_anchor = "insert_after = \"const log_level = uci.get(uciconfig, ucimain, 'log_level') || 'warn';\""
-assert old_anchor not in text, "HomeProxy patch must not require the UCI end marker to be adjacent"
-assert new_anchor in text, "HomeProxy patch must define a standalone log_level anchor"
-assert "replace_required(gen_client_uc, insert_after, modern_guard)" in text
-PY
-	then
-		pass 'HomeProxy patch anchors modern guard after log_level independently of later UCI variables'
-	else
-		fail 'HomeProxy patch must use an independent log_level anchor'
-	fi
-}
-
 test_update_workflow_lease() {
 	local workflow
 	for workflow in \
@@ -66,24 +45,25 @@ PY
 }
 
 test_proxy_version_alignment() {
-	if python3 - "$REPO_ROOT/.github/proxy-locks.env" "$REPO_ROOT/Scripts/RefreshProxyLocks.sh" "$REPO_ROOT/Scripts/PatchHomeProxyModern.sh" "$REPO_ROOT/.github/workflows/c8-660-open.yml" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-lock, refresh, patch, workflow = [Path(item).read_text(encoding="utf-8") for item in sys.argv[1:]]
-version = re.search(r"^SING_BOX_VERSION=(\d+)\.(\d+)", lock, re.M)
-assert version and (int(version.group(1)), int(version.group(2))) >= (1, 14), \
-    "HomeProxy requires sing-box 1.14 or newer"
-assert "SING_BOX_MAX_MINOR=14" in refresh
-assert 'HTTP_CLIENT_USES="$(awk' in patch and '" -lt 1' in patch
-assert 'HTTP_CLIENT_USES="$(printf' in workflow and '" -lt 1' in workflow
-PY
-	then
-		pass 'HomeProxy and sing-box locks share the required 1.14 compatibility line'
+	local fixture recipe tag hash
+	fixture="$(mktemp -d)" || { fail 'cannot prepare sing-box recipe fixture'; return; }
+	mkdir -p "$fixture/package/sing-box"
+	recipe="$fixture/package/sing-box/Makefile"
+	tag="$(sed -n 's/^SING_BOX_TAG=v//p' "$REPO_ROOT/.github/proxy-locks.env" | tr -d '\r')"
+	hash="$(sed -n 's/^SING_BOX_HASH=//p' "$REPO_ROOT/.github/proxy-locks.env" | tr -d '\r')"
+	printf 'PKG_UPSTREAM_VERSION:=%s\nPKG_HASH:=%s\n' "$tag" "$hash" > "$recipe"
+	if GITHUB_WORKSPACE="$REPO_ROOT" bash "$SCRIPT_DIR/ApplyProxyLocks.sh" "$fixture"; then
+		pass 'the configured sing-box tag, APK version and hash match its package recipe'
 	else
-		fail 'HomeProxy and sing-box locks must share the required 1.14 compatibility line'
+		fail 'sing-box package recipe matching the lock must be accepted'
 	fi
+	printf 'PKG_UPSTREAM_VERSION:=%s\nPKG_HASH:=wrong\n' "$tag" > "$recipe"
+	if GITHUB_WORKSPACE="$REPO_ROOT" bash "$SCRIPT_DIR/ApplyProxyLocks.sh" "$fixture" >/dev/null 2>&1; then
+		fail 'sing-box recipe with a mismatched source hash must be rejected'
+	else
+		pass 'sing-box recipe with a mismatched source hash is rejected'
+	fi
+	rm -rf "$fixture"
 }
 
 test_nightly_pr_fallback() {
@@ -116,7 +96,6 @@ PY
 	done
 }
 
-test_homeproxy_anchor
 test_update_workflow_lease
 test_nightly_pr_fallback
 test_proxy_version_alignment

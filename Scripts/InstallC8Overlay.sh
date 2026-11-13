@@ -131,7 +131,16 @@ REQUIRE_PATTERN "$OVERLAY_DST/etc/uci-defaults/99-v12-defaults.sh" "network\\.wa
 REQUIRE_PATTERN "$OVERLAY_DST/etc/uci-defaults/99-v12-defaults.sh" "network\\.wan6\\.proto='dhcpv6'" "cellular IPv6 DHCPv6"
 REQUIRE_PATTERN "$OVERLAY_DST/etc/uci-defaults/99-v12-defaults.sh" "dhcp\\.lan\\.dhcpv6='relay'" "IPv6 relay for cellular /64"
 REQUIRE_PATTERN "$OVERLAY_DST/etc/uci-defaults/99-v12-defaults.sh" "network\\.globals\\.packet_steering='1'" "packet steering default"
-REQUIRE_PATTERN "$OVERLAY_DST/etc/uci-defaults/99-v12-defaults.sh" "firewall\\.@defaults\\[0\\]\\.flow_offloading_hw='1'" "hardware flow offloading default"
+case "${ENABLE_FLOW_OFFLOADING:-true}" in
+	true) offload=1 ;;
+	false) offload=0 ;;
+	*) LOG "ERROR: invalid ENABLE_FLOW_OFFLOADING"; exit 1 ;;
+esac
+for option in flow_offloading flow_offloading_hw; do
+	file="$OVERLAY_DST/etc/uci-defaults/99-v12-defaults.sh"
+	REQUIRE_PATTERN "$file" "firewall\\.@defaults\\[0\\]\\.$option='1'" "$option template"
+	sed -i "s/\.$option='1'/.$option='$offload'/" "$file"
+done
 REQUIRE_PATTERN "$OVERLAY_DST/etc/uci-defaults/99-v12-defaults.sh" "wireless\\.default_radio0\\.macaddr" "stable 2.4G WiFi MAC default"
 REQUIRE_PATTERN "$OVERLAY_DST/etc/uci-defaults/99-v12-defaults.sh" "wireless\\.default_radio1\\.macaddr" "stable 5G WiFi MAC default"
 REQUIRE_PATTERN "$OVERLAY_DST/www/luci-static/resources/view/c8modem/sms-forward.js" "forward_primary_channel" "SMS primary/backup channel UI"

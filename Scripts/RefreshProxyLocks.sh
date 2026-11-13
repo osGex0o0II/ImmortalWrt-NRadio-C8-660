@@ -5,73 +5,45 @@ set -euo pipefail
 
 REPO_DIR="${GITHUB_WORKSPACE:-$(cd "$(dirname "$0")/.." && pwd)}"
 LOCK_FILE="$REPO_DIR/.github/proxy-locks.env"
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
 
-LOG() { echo "=== $* ==="; }
-
-GIT_REMOTE() {
-	git -c http.proxy= -c https.proxy= "$@"
+# Refresh the pair from one commit: its recipe carries the APK version mapping,
+# build flags and files required by this HomeProxy revision.
+git -c http.proxy= -c https.proxy= clone --quiet --depth=1 --branch main \
+	https://github.com/VIKINGYFY/packages.git "$TMP_DIR/packages"
+LATEST_HOMEPROXY_COMMIT="$(git -C "$TMP_DIR/packages" rev-parse HEAD)"
+RECIPE="$TMP_DIR/packages/sing-box/Makefile"
+HOMEPROXY_RECIPE="$TMP_DIR/packages/luci-app-homeproxy/Makefile"
+[ -s "$RECIPE" ] && [ -s "$HOMEPROXY_RECIPE" ] || {
+	echo "ERROR: VIKINGYFY proxy package recipes are missing" >&2
+	exit 1
 }
 
-# sing-box 1.14 is required by the current VIKINGYFY HomeProxy package
-# (LUCI_EXTRA_DEPENDS sing-box >=1.14.0_alpha1). 1.13 stays excluded because
-# its jsonv2 snapshot fails under buildroot Go; prereleases are never
-# auto-pinned, so the refresh keeps the newest 1.14.x stable tag.
-SING_BOX_MAX_MINOR=14
-
-LATEST_SING_BOX_TAG="$(
-	GIT_REMOTE ls-remote --tags --refs https://github.com/SagerNet/sing-box.git \
-		| awk '{print $2}' \
-		| sed 's#refs/tags/##' \
-		| grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-		| awk -F. -v max="$SING_BOX_MAX_MINOR" '$2 <= max' \
-		| sort -V \
-		| tail -1
-)"
-
-if [ -z "$LATEST_SING_BOX_TAG" ]; then
-	LOG "ERROR: failed to detect latest sing-box stable tag"
+upstream_version="$(sed -n 's/^PKG_UPSTREAM_VERSION:=//p' "$RECIPE" | tr -d '\r')"
+expected_hash="$(sed -n 's/^PKG_HASH:=//p' "$RECIPE" | tr -d '\r')"
+if [[ ! "$upstream_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ||
+      ! "$expected_hash" =~ ^[0-9a-f]{64}$ ]]; then
+	echo "ERROR: unexpected sing-box version or SHA-256 in VIKINGYFY recipe" >&2
 	exit 1
 fi
 
-TMP_TARBALL="$(mktemp)"
-trap 'rm -f "$TMP_TARBALL"' EXIT
-
-if ! curl -fsSL --retry 5 --retry-all-errors --http1.1 "https://codeload.github.com/SagerNet/sing-box/tar.gz/$LATEST_SING_BOX_TAG" -o "$TMP_TARBALL" 2>/dev/null; then
-	python3 - "$LATEST_SING_BOX_TAG" "$TMP_TARBALL" <<'PY'
-from pathlib import Path
-import sys
-import urllib.request
-
-tag = sys.argv[1]
-out = Path(sys.argv[2])
-url = f"https://codeload.github.com/SagerNet/sing-box/tar.gz/{tag}"
-with urllib.request.urlopen(url, timeout=30) as resp:
-    out.write_bytes(resp.read())
-PY
-fi
-LATEST_SING_BOX_HASH="$(sha256sum "$TMP_TARBALL" | awk '{print tolower($1)}')"
-LATEST_SING_BOX_VERSION="${LATEST_SING_BOX_TAG#v}"
-LATEST_SING_BOX_VERSION="${LATEST_SING_BOX_VERSION//-/_}"
-LATEST_HOMEPROXY_COMMIT="$(
-	GIT_REMOTE ls-remote --heads https://github.com/VIKINGYFY/packages.git main \
-		| awk '{print $1}' \
-		| head -1
-)"
-
-if [ -z "$LATEST_HOMEPROXY_COMMIT" ]; then
-	LOG "ERROR: failed to detect latest HomeProxy master commit"
+tag="v$upstream_version"
+version="$(printf '%s' "$upstream_version" | sed -E 's/-(alpha|beta|rc)\./_\1/')"
+curl -fsSL --retry 5 --retry-all-errors --http1.1 \
+	"https://codeload.github.com/SagerNet/sing-box/tar.gz/$tag" -o "$TMP_DIR/sing-box.tar.gz"
+hash="$(sha256sum "$TMP_DIR/sing-box.tar.gz" | awk '{print $1}')"
+if [ "$hash" != "$expected_hash" ]; then
+	echo "ERROR: downloaded sing-box archive does not match the VIKINGYFY SHA-256" >&2
 	exit 1
 fi
 
-mkdir -p "$(dirname "$LOCK_FILE")"
 cat > "$LOCK_FILE" <<EOF
-SING_BOX_TAG=$LATEST_SING_BOX_TAG
-SING_BOX_VERSION=$LATEST_SING_BOX_VERSION
-SING_BOX_HASH=$LATEST_SING_BOX_HASH
+SING_BOX_TAG=$tag
+SING_BOX_VERSION=$version
+SING_BOX_HASH=$hash
 PKG_LOCK_homeproxy_BRANCH=main
 PKG_LOCK_homeproxy_COMMIT=$LATEST_HOMEPROXY_COMMIT
 EOF
 
-LOG "Updated proxy locks"
-LOG "sing-box: $LATEST_SING_BOX_TAG"
-LOG "homeproxy: $LATEST_HOMEPROXY_COMMIT"
+echo "Refreshed paired VIKINGYFY locks: sing-box $tag; packages $LATEST_HOMEPROXY_COMMIT"
