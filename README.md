@@ -4,6 +4,10 @@
 
 NRadio C8-660 (MediaTek MT7981B) 专用 ImmortalWrt 固件编译 CI。
 
+- [固件下载与发布说明](https://github.com/osGex0o0II/ImmortalWrt-NRadio-C8-660/releases/tag/c8-660-2026.11.13-test1)
+- 2026.11.13 预发布包含 Open（原生 PPE + mt76 WED，Linux 6.18.60）和 Closed（厂商 HNAT + WARP/WED，Linux 6.12.112）。两套镜像均通过构建及离线检查，尚未完成实机启动和加速验收。
+- 此次产物使用构建专用的非公开 root 测试密码，只适用于已持有对应凭据的测试者。其他用户请自行构建并设置 `WRT_PW`；不要将此预发布用作通用首次安装包。
+
 ## 硬件规格
 
 | 项目 | 参数 |
@@ -63,7 +67,7 @@ ip-full, lsblk, openssh-keygen, adb（RM520N 原生 IPv6/ADB 状态支持）等
 | **源码** | immortalwrt/immortalwrt (`master`) | chasey-dev/immortalwrt-mt798x-rebase (`25.12`) |
 | **内核** | Linux 6.18 (master snapshot) | Linux 6.12 |
 | **WiFi 驱动** | mt76 (开源) | mt_wifi 7.6.7.3 (MediaTek 专有) |
-| **硬件加速** | mt76 WED | HNAT + WARP/WED |
+| **硬件加速** | 原生 PPE（nftables 流卸载）+ mt76 WED | 厂商 HNAT + WARP/WED |
 | **设备支持** | 通过 `patches/` 注入 | 通过闭源专用目标注入脚本安装 |
 | **默认 IP** | 192.168.1.1 | 192.168.1.1 |
 | **默认主题** | Aurora | Aurora |
@@ -172,7 +176,7 @@ logread | grep hnat-detect
 cat /sys/kernel/debug/hnat/hnat_entry | grep -c BIND
 ```
 
-分别从 LAN 和 WiFi 客户端持续访问 RM520N WAN，在流量前后重复最后一条命令；两条路径都必须出现 PPE `BIND` 数量增长。默认 `eth1` 路径下没有 `rxppd` 是正常现象；外部 USB/QMI 路径若没有 `rxppd`，应先检查 netifd 的真实 L3 设备名，再针对 `qmimux*`/`rmnet*` 做窄范围适配。HNAT 未绑定时 fw4 的软件转发应继续工作，只是吞吐和 CPU 占用会退化，不能以关闭软件回退来掩盖硬件加速失败。
+分别从有线和 Wi-Fi 客户端向 RM520N WAN 发起新的 TCP/UDP 连接，在 `hnat_entry` 按同一测试连接匹配正反方向的 `BIND` 条目及包、字节增量。全局条目数量仅供参考。Open 使用 `/sys/kernel/debug/ppe0/bind` 和 `ppe1/bind` 检查原生 PPE。默认 `eth1` 路径下没有 `rxppd` 是正常现象；外部 USB/QMI 路径若没有 `rxppd`，应先检查 netifd 的真实 L3 设备名，再针对 `qmimux*`/`rmnet*` 做窄范围适配。HNAT 未绑定时 fw4 的软件转发应继续工作，只是吞吐和 CPU 占用会退化，不能以关闭软件回退来掩盖硬件加速失败。
 
 ## 高级特性
 
@@ -187,7 +191,7 @@ cat /sys/kernel/debug/hnat/hnat_entry | grep -c BIND
 | C8 短信转发 | 内置多通道推送、主备通道、日志、测试按钮和 `sms_tool` 超时保护 | `patches/files/usr/bin/c8-sms-forward`, `patches/files/www/luci-static/resources/view/c8modem/` |
 | 第三方包锁定 | 通过 `PKG_LOCK_<name>_COMMIT` 环境变量锁定包版本 | `Scripts/Packages.sh` |
 | 代理组件版本锁定 | HomeProxy 与 sing-box 打包规则取自同一个 VIKINGYFY/packages 提交；锁文件校验内核发布标签、APK 版本和源码 SHA-256 | `.github/proxy-locks.env`, `Scripts/ApplyProxyLocks.sh` |
-| SHA256 脚本校验 | `init_build_environment.sh` 使用仓库 pin 文件校验，并由定时工作流跟随上游更新 | `.github/init_build_environment.sha256`, `.github/workflows/update-init-build-sha.yml` |
+| SHA256 脚本校验 | `init_build_environment.sh` 固定官方提交和 SHA-256，定时工作流可提出更新供审核 | `.github/init_build_environment.sha256`, `.github/workflows/update-init-build-sha.yml` |
 | 旧设备兼容 | `SUPPORTED_DEVICES nradio,wt9103` 支持旧 DTS 名称升级 | `patches/filogic-c8-660.mk` |
 | CCache 加速 | 编译缓存自动持久化，增量编译时间 -50% | `.github/workflows` |
 | 自定义扩展 | `Scripts/PRIVATE.sh` + `Config/PRIVATE.txt` 可选私有配置（gitignored） | `Scripts/`, `Config/` |
