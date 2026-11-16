@@ -378,26 +378,8 @@ jobs:
           root_shadow="$($unsquashfs -cat "$rootfs" etc/shadow | sed -n 's/^root:\([^:]*\):.*/\1/p')"
           [ -n "$root_shadow" ] || { echo "::error::Root password hash is empty"; exit 1; }
 
-      - name: Cleanup Old Closed Releases
-        if: ${{ inputs.publish_release }}
-        env:
-          KEEP_RELEASES: ${{ inputs.keep_releases }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          keep="$KEEP_RELEASES"
-          case "$keep" in ''|*[!0-9]*) keep=3 ;; esac
-          releases="$(gh release list --json tagName,publishedAt --limit 100 --jq '
-            [.[] | select(.tagName | startswith("c8-660-closed-"))]
-            | sort_by(.publishedAt) | .[0:-'"$keep"'] | .[].tagName
-          ' 2>/dev/null || true)"
-          for tag in $releases; do
-            gh release delete "$tag" --yes 2>/dev/null || true
-            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" 2>/dev/null || true
-          done
-
       - name: Release Firmware
-        if: ${{ inputs.publish_release }}
+        if: ${{ inputs.publish_release && github.ref == 'refs/heads/main' }}
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3  # v3.0.4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -405,6 +387,8 @@ jobs:
           tag_name: ${{env.RELEASE_TAG}}
           name: C8-660 Closed ${{env.RELEASE_DATE}} ${{env.RELEASE_TIME}}
           fail_on_unmatched_files: true
+          prerelease: true
+          make_latest: false
           files: |
             ./wrt/upload/immortalwrt-c8-660-closed-factory.bin
             ./wrt/upload/immortalwrt-c8-660-closed-sysupgrade.bin
@@ -414,6 +398,9 @@ jobs:
             ./wrt/upload/build-metadata.txt
             ./wrt/upload/sha256sums
           body: |
+            **测试预发布：CI 编译通过，尚未完成实机引导、网络与硬件加速验证。**
+            镜像包含构建时配置的 root 凭据；仅供已获授权的测试者使用。Open 与 Closed 固件不可混刷。
+
             ## C8-660 Closed firmware
 
             - Source: `${{env.WRT_REPO}}` (`${{env.WRT_BRANCH}}`) @ `${{env.WRT_HASH_FULL}}`
@@ -425,8 +412,26 @@ jobs:
 
             Verify `sha256sums` before flashing. Back up BL2, FIP and factory data first.
 
+      - name: Cleanup Old Closed Releases
+        if: ${{ inputs.publish_release && github.ref == 'refs/heads/main' }}
+        env:
+          KEEP_RELEASES: ${{ inputs.keep_releases }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          keep="$KEEP_RELEASES"
+          case "$keep" in ''|*[!0-9]*|0) keep=3 ;; esac
+          releases="$(gh release list --json tagName,publishedAt --limit 100 --jq '
+            [.[] | select(.tagName | startswith("c8-660-closed-"))]
+            | sort_by(.publishedAt) | .[0:-'"$keep"'] | .[].tagName
+          ' 2>/dev/null || true)"
+          for tag in $releases; do
+            gh release delete "$tag" --yes 2>/dev/null || true
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" 2>/dev/null || true
+          done
+
       - name: Upload Firmware Artifact
-        if: ${{ inputs.publish_release == false }}
+        if: ${{ inputs.publish_release == false || github.ref != 'refs/heads/main' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: firmware-${{env.WRT_CONFIG}}-${{env.WRT_HASH}}-${{github.run_id}}

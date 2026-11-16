@@ -1181,35 +1181,8 @@ jobs:
           done
           echo "OK: C8 cellular WAN, IPv6 relay, DNS/DHCP path, and SMS channel defaults are present"
 
-      - name: Cleanup Old Releases
-        if: ${{ inputs.publish_release }}
-        env:
-          KEEP_RELEASES: ${{ inputs.keep_releases }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          KEEP="$KEEP_RELEASES"
-          case "$KEEP" in
-            ''|*[!0-9]*) KEEP=3 ;;
-          esac
-          RELEASES=$(gh release list --json tagName,publishedAt --limit 100 --jq '
-            [
-              .[] | select(
-                (.tagName | startswith("c8-660-open-")) or
-                ((.tagName | startswith("immortalwrt-c8-660-")) and ((.tagName | startswith("immortalwrt-c8-660-closed-")) | not)) or
-                (.tagName | startswith("NRADIO-C8-660-immortalwrt-openwrt-25.12-")) or
-                (.tagName | startswith("NRADIO-C8-660-immortalwrt-master-"))
-              )
-            ] | sort_by(.publishedAt) | .[0:-'"$KEEP"'] | .[].tagName
-          ' 2>/dev/null) || true
-          for TAG in $RELEASES; do
-            echo "Deleting release and tag: $TAG"
-            gh release delete "$TAG" --yes 2>/dev/null || true
-            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" 2>/dev/null || true
-          done
-          echo "Cleanup done (kept last $KEEP releases)"
-
       - name: Release Firmware
-        if: ${{ inputs.publish_release }}
+        if: ${{ inputs.publish_release && github.ref == 'refs/heads/main' }}
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3  # v3.0.4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1217,6 +1190,8 @@ jobs:
           tag_name: ${{env.RELEASE_TAG}}
           name: C8-660 Open (mt76) ${{env.RELEASE_DATE}} ${{env.RELEASE_TIME}}
           fail_on_unmatched_files: true
+          prerelease: true
+          make_latest: false
           files: |
             ./wrt/upload/immortalwrt-c8-660-factory.bin
             ./wrt/upload/immortalwrt-c8-660-sysupgrade.bin
@@ -1225,6 +1200,9 @@ jobs:
             ./wrt/upload/immortalwrt-c8-660.manifest
             ./wrt/upload/sha256sums
           body: |
+            **测试预发布：CI 编译通过，尚未完成实机引导、网络与硬件加速验证。**
+            镜像包含构建时配置的 root 凭据；仅供已获授权的测试者使用。Open 与 Closed 固件不可混刷。
+
             ## C8-660 Open 固件
 
             **下载**
@@ -1244,8 +1222,35 @@ jobs:
             - Open 与 Closed 固件不通用。
             - 详细刷机说明见 [README](https://github.com/${{github.repository}}#使用流程)。
 
+      - name: Cleanup Old Releases
+        if: ${{ inputs.publish_release && github.ref == 'refs/heads/main' }}
+        env:
+          KEEP_RELEASES: ${{ inputs.keep_releases }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          KEEP="$KEEP_RELEASES"
+          case "$KEEP" in
+            ''|*[!0-9]*|0) KEEP=3 ;;
+          esac
+          RELEASES=$(gh release list --json tagName,publishedAt --limit 100 --jq '
+            [
+              .[] | select(
+                (.tagName | startswith("c8-660-open-")) or
+                ((.tagName | startswith("immortalwrt-c8-660-")) and ((.tagName | startswith("immortalwrt-c8-660-closed-")) | not)) or
+                (.tagName | startswith("NRADIO-C8-660-immortalwrt-openwrt-25.12-")) or
+                (.tagName | startswith("NRADIO-C8-660-immortalwrt-master-"))
+              )
+            ] | sort_by(.publishedAt) | .[0:-'"$KEEP"'] | .[].tagName
+          ' 2>/dev/null) || true
+          for TAG in $RELEASES; do
+            echo "Deleting release and tag: $TAG"
+            gh release delete "$TAG" --yes 2>/dev/null || true
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" 2>/dev/null || true
+          done
+          echo "Cleanup done (kept last $KEEP releases)"
+
       - name: Upload Firmware Artifact
-        if: ${{ inputs.publish_release == false }}
+        if: ${{ inputs.publish_release == false || github.ref != 'refs/heads/main' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: firmware-${{env.WRT_CONFIG}}-${{env.WRT_DATE}}
