@@ -1,0 +1,190 @@
+name: C8-660 One-Time Release Migration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/c8-660-one-time-release-migration.yml
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: c8-660-release-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    if: github.repository == 'osGex0o0II/ImmortalWrt-NRadio-C8-660' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Validate, split, publish, and clean
+        shell: bash
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          repo="$GH_REPO"
+          legacy="c8-660-2026.11.13-test1"
+          open_tag="c8-660-open-2026.11.13-test1"
+          closed_tag="c8-660-closed-2026.11.13-test1"
+          source_sha="7ab3872d40fb10efeb357fe2347e02069684bc47" # Provenance only: firmware was built from this commit.
+          release_sha="$GITHUB_SHA" # Tag the current branch head to avoid workflow-file permission restrictions.
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          mkdir -p "$work/all" "$work/open" "$work/closed"
+          
+          echo "::group::Download original test assets"
+          gh release download "$legacy" --repo "$repo" --dir "$work/all"
+          echo "::endgroup::"
+          
+          copy_required() {
+            local name="$1" destination="$2"
+            if [[ ! -s "$work/all/$name" ]]; then
+              echo "::error::Missing asset: $name" >&2
+              exit 1
+            fi
+            cp "$work/all/$name" "$destination"
+          }
+          
+          for name in immortalwrt-c8-660-factory.bin immortalwrt-c8-660-sysupgrade.bin immortalwrt-c8-660-initramfs.bin immortalwrt-c8-660.manifest mt7981-bl2.bin; do
+            copy_required "$name" "$work/open/"
+          done
+          copy_required "sha256sums-open.txt" "$work/open/sha256sums"
+          
+          for name in immortalwrt-c8-660-closed-factory.bin immortalwrt-c8-660-closed-sysupgrade.bin immortalwrt-c8-660-closed-initramfs.bin immortalwrt-c8-660-closed.manifest mt7981-ddr4-bl2.bin; do
+            copy_required "$name" "$work/closed/"
+          done
+          copy_required "sha256sums-closed.txt" "$work/closed/sha256sums"
+          copy_required "closed-build-metadata.txt" "$work/closed/closed-build-metadata.txt"
+          
+          verify_source() {
+            local dir="$1" count="$2"
+            [[ "$(find "$dir" -maxdepth 1 -type f | wc -l)" -eq "$count" ]]
+            (cd "$dir" && sha256sum --strict -c sha256sums)
+            local listed actual
+            listed="$(awk '{sub(/^\.\//,"",$2); print $2}' "$dir/sha256sums" | sort)"
+            actual="$(find "$dir" -maxdepth 1 -type f ! -name sha256sums -printf '%f\n' | sort)"
+            [[ "$listed" == "$actual" ]] || {
+              echo "::error::Missing file in checksum manifest: $dir" >&2
+              exit 1
+            }
+          }
+          echo "::group::Verify original SHA-256 checksums"
+          verify_source "$work/open" 6
+          verify_source "$work/closed" 7
+          echo "::endgroup::"
+          
+          cat > "$work/open.md" <<'EOF'
+          ## NRadio C8-660 · Open
+          
+          **测试预发布。** 编译及离线镜像检查通过，尚未完成实机启动、Wi-Fi、5G 和 PPE/WED 验证。
+          
+          - 驱动：mt76；加速：原生 PPE + WED
+          - 内核：Linux 6.18.60
+          - 构建提交：7ab3872d40fb10efeb357fe2347e02069684bc47
+          - 来源：2026-11-13 成功构建产物，按变体拆分，未重新编译
+          
+          镜像使用非公开 root 测试密码，仅供持有凭据的测试者使用。请校验 sha256sums；勿从原厂 NROS Web 直接升级，勿与 Closed 混刷。刷机前备份引导与校准分区。
+          
+          [刷机与验收说明](https://github.com/osGex0o0II/ImmortalWrt-NRadio-C8-660/blob/main/docs/VALIDATION.md)
+          EOF
+          cat > "$work/closed.md" <<'EOF'
+          ## NRadio C8-660 · Closed
+          
+          **测试预发布。** 编译及离线镜像检查通过，尚未完成实机启动、Wi-Fi、5G 和 HNAT/WARP 验证。
+          
+          - 驱动：MediaTek mt_wifi 7.6.7.3；加速：HNAT + WARP/WED
+          - 内核：Linux 6.12.112
+          - 构建提交：7ab3872d40fb10efeb357fe2347e02069684bc47
+          - 来源：2026-11-13 成功构建产物，按变体拆分，未重新编译
+          - 默认 WAN：RM520N RGMII/IPPT（eth1）
+          
+          镜像使用非公开 root 测试密码，仅供持有凭据的测试者使用。请校验 sha256sums；勿从原厂 NROS Web 直接升级，勿与 Open 混刷。刷机前备份引导与校准分区。
+          
+          [刷机与验收说明](https://github.com/osGex0o0II/ImmortalWrt-NRadio-C8-660/blob/main/docs/VALIDATION.md)
+          EOF
+          
+          publish() {
+            local tag="$1" dir="$2" title="$3" notes="$4"
+            if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+              echo "Release already exists; will verify: $tag"
+            else
+              gh release create "$tag" "$dir"/* --repo "$repo" \
+                --target "$release_sha" --title "$title" --notes-file "$notes" \
+                --prerelease --latest=false
+            fi
+          }
+          echo "::group::Publish separate variants"
+          publish "$open_tag" "$work/open" "NRadio C8-660 · Open · 2026.11.13" "$work/open.md"
+          publish "$closed_tag" "$work/closed" "NRadio C8-660 · Closed · 2026.11.13" "$work/closed.md"
+          echo "::endgroup::"
+          
+          verify_release() {
+            local tag="$1" dir="$2" state actual expected
+            state="$(gh api "repos/$repo/releases/tags/$tag")"
+            [[ "$(jq -r '.prerelease' <<<"$state")" == "true" ]]
+            actual="$(jq -r '.assets[].name' <<<"$state" | sort)"
+            expected="$(find "$dir" -maxdepth 1 -type f -printf '%f\n' | sort)"
+            [[ "$actual" == "$expected" ]] || {
+              echo "::error::Asset names mismatch for $tag" >&2
+              exit 1
+            }
+            [[ "$(gh api "repos/$repo/git/ref/tags/$tag" --jq '.object.sha')" == "$release_sha" ]] || {
+              echo "::error::Release tag points at unexpected commit: $tag" >&2
+              exit 1
+            }
+            while IFS=$'\t' read -r name digest size; do
+              [[ -s "$dir/$name" && "$(stat -c %s "$dir/$name")" == "$size" ]] || exit 1
+              if [[ "$digest" == sha256:* ]]; then
+                [[ "sha256:$(sha256sum "$dir/$name" | cut -d' ' -f1)" == "$digest" ]] || exit 1
+              fi
+            done < <(jq -r '.assets[] | [.name, (.digest // ""), (.size|tostring)] | @tsv' <<<"$state")
+            echo "VERIFIED $tag with $(jq '.assets | length' <<<"$state") assets"
+          }
+          
+          echo "::group::Verify GitHub release contents"
+          verify_release "$open_tag" "$work/open"
+          verify_release "$closed_tag" "$work/closed"
+          echo "::endgroup::"
+          
+          echo "::group::Delete superseded combined test release"
+          if ! gh release delete "$legacy" --repo "$repo" --cleanup-tag --yes; then
+            echo "::warning::Legacy combined release could not be deleted; preserving it for manual review"
+          fi
+          echo "::endgroup::"
+          
+          delete_stale_branch() {
+            local name="$1" expected="$2" current
+            current="$(gh api "repos/$repo/git/ref/heads/$name" --jq '.object.sha' 2>/dev/null || true)"
+            if [[ "$current" == "$expected" ]]; then
+              if gh api -X DELETE "repos/$repo/git/refs/heads/$name"; then
+                echo "DELETED branch: $name"
+              else
+                echo "::warning::Cannot delete branch $name; repository policy or token restrictions"
+              fi
+            elif [[ -z "$current" ]]; then
+              echo "Already absent: $name"
+            else
+              echo "::warning::Preserving moved branch $name ($current)"
+            fi
+          }
+          echo "::group::Clean stale branches"
+          delete_stale_branch "codex/update-init-build-sha" "1731e11f27964ad96b828557cad2e222dc9a6a92"
+          delete_stale_branch "codex/update-proxy-locks" "12544c5a761a8a8c6e201a75d4f5d6ca5be2909a"
+          echo "::endgroup::"
+          
+          echo "::group::Clean historical successful runs"
+          for run_id in 43343283100 43374728344; do
+            if gh api -X DELETE "repos/$repo/actions/runs/$run_id"; then
+              echo "DELETED run: $run_id"
+            else
+              echo "::warning::Cannot delete historical run $run_id"
+            fi
+          done
+          echo "::endgroup::"
+          echo "COMPLETE: two independent prereleases verified; cleanup attempts reported above."
