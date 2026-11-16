@@ -22,7 +22,8 @@ Open 默认跟随上游 `master`，后续构建版本可能变化；可通过工
 ## 下载与构建
 
 - [Releases](https://github.com/osGex0o0II/ImmortalWrt-NRadio-C8-660/releases) — 固件发布与校验文件
-- [2026-11-13 双变体测试预发布](https://github.com/osGex0o0II/ImmortalWrt-NRadio-C8-660/releases/tag/c8-660-2026.11.13-test1) — 历史合并测试包；后续按 Open / Closed 分别发布
+- [Open · 2026.11.13](https://github.com/osGex0o0II/ImmortalWrt-NRadio-C8-660/releases/tag/c8-660-open-2026.11.13-test1) — mt76 / 原生 PPE + WED
+- [Closed · 2026.11.13](https://github.com/osGex0o0II/ImmortalWrt-NRadio-C8-660/releases/tag/c8-660-closed-2026.11.13-test1) — mt_wifi 7.6.7.3 / HNAT + WARP/WED
 - [Actions](https://github.com/osGex0o0II/ImmortalWrt-NRadio-C8-660/actions) — 在 `main` 上手动运行对应构建工作流
 
 首次使用需设置仓库 Actions Secret `WRT_PW`（root 密码，必填）；`WRT_WORD` 为 Wi-Fi 密码，未设置时无线网络为**开放网络**。构建与发布选项见 [构建说明](docs/BUILD.md)。
