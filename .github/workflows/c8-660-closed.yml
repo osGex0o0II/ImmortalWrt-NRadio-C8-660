@@ -398,19 +398,19 @@ jobs:
             ./wrt/upload/build-metadata.txt
             ./wrt/upload/sha256sums
           body: |
-            **测试预发布：CI 编译通过，尚未完成实机引导、网络与硬件加速验证。**
-            镜像包含构建时配置的 root 凭据；仅供已获授权的测试者使用。Open 与 Closed 固件不可混刷。
+            ## NRadio C8-660 · Closed
 
-            ## C8-660 Closed firmware
+            **测试预发布。** 仅通过 CI 编译与静态检查；实机引导、Wi-Fi、5G 及 HNAT/WARP 尚未验收。
 
-            - Source: `${{env.WRT_REPO}}` (`${{env.WRT_BRANCH}}`) @ `${{env.WRT_HASH_FULL}}`
-            - MTK LuCI packages: `${{env.WRT_MTK_APPS_REF}}`
-            - Kernel: `${{env.WRT_KVER}}`
-            - WiFi: `mt_wifi 7.6.7.3`
-            - Acceleration: MediaTek HNAT + WARP/WED
-            - WAN data path: RM520N RGMII/IPPT on `eth1`
+            - 驱动：MediaTek mt_wifi 7.6.7.3；加速：HNAT + WARP/WED
+            - 固件源码：${{env.WRT_REPO}} (`${{env.WRT_BRANCH}}`) @ `${{env.WRT_HASH_FULL}}`
+            - MTK 配套包：`${{env.WRT_MTK_APPS_REF}}`
+            - 内核：`${{env.WRT_KVER}}`；默认 WAN：RM520N RGMII/IPPT (`eth1`)
+            - 固件：`factory`（首次安装）/ `sysupgrade`（同变体升级）/ `initramfs`（调试）
 
-            Verify `sha256sums` before flashing. Back up BL2, FIP and factory data first.
+            仅限持有构建时 root 凭据的测试者。不可直接从原厂 NROS Web 升级，也不可与 Open 交叉刷写。请先备份设备引导及校准分区，使用 `sha256sums` 校验附件。
+
+            [刷机准备与实机验证](https://github.com/osGex0o0II/ImmortalWrt-NRadio-C8-660/blob/main/docs/VALIDATION.md)
 
       - name: Cleanup Old Closed Releases
         if: ${{ inputs.publish_release && github.ref == 'refs/heads/main' }}

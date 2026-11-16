@@ -1,6 +1,6 @@
 # 构建与发布
 
-本文针对仓库维护者。工作流需在仓库 `main` 分支运行，使用 GitHub-hosted `ubuntu-24.04`。本地脚本依赖 Linux/GNU 工具链；可使用 Linux 或 WSL 调试。
+本文针对仓库维护者。发布仅允许在 `main` 分支执行；其他分支可测试构建并上传 Artifact。两条固件工作流均使用 GitHub-hosted `ubuntu-24.04`；本地脚本依赖 Linux/GNU 工具链，可在 Linux 或 WSL 中调试。
 
 ## 构建选项
 
