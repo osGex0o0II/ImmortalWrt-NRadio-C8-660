@@ -62,7 +62,7 @@ jobs:
             copy_required "$name" "$work/closed/"
           done
           copy_required "sha256sums-closed.txt" "$work/closed/sha256sums"
-          copy_required "closed-build-metadata.txt" "$work/closed/build-metadata.txt"
+          copy_required "closed-build-metadata.txt" "$work/closed/closed-build-metadata.txt"
           
           verify_source() {
             local dir="$1" count="$2"
